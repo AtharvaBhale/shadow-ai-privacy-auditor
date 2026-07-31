@@ -2,39 +2,78 @@
 import re
 import math
 
+# ---------------------------------------------------------------------------
+# ML model: dslim/bert-base-NER (Hugging Face, Apache 2.0, free, no API key).
+# Loaded lazily and cached so the app doesn't pay model-load cost on every
+# audit call, and so importing this module doesn't require the model to be
+# present (keeps unit tests fast / offline-safe).
+# ---------------------------------------------------------------------------
+_ner_pipeline = None
+
+
+def _get_ner_pipeline():
+    global _ner_pipeline
+    if _ner_pipeline is None:
+        from transformers import pipeline
+        _ner_pipeline = pipeline(
+            "ner",
+            model="dslim/bert-base-NER",
+            grouped_entities=True,
+        )
+    return _ner_pipeline
+
+
 class PrivacyAuditorEngine:
-    def __init__(self):
-        # 1. Names & Contact Info
+    """
+    Detection is ML-first: a pretrained NER model (dslim/bert-base-NER) does
+    the core work of finding names and organizations (see model card in
+    docs/model_card.md). Regex + validation logic SUPPORT the model for
+    categories that are inherently structured/rule-based rather than
+    linguistic — SSNs, credit card numbers (Luhn-validated), and credentials
+    (entropy-validated) — exactly as the brief allows ("regular expressions
+    may support it, but the model does the core work").
+    """
+
+    # NER entity groups this app treats as sensitive, and which internal
+    # category each maps to.
+    NER_CATEGORY_MAP = {
+        "PER": "NAME",
+        "ORG": "CONFIDENTIAL_INFO",   # org names showing up in casual text can leak affiliations/deals
+    }
+
+    def __init__(self, use_ml: bool = True):
+        self.use_ml = use_ml
+
+        # --- Structured / rule-based detectors (support the ML model) ---
         self.email_regex = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
         self.phone_regex = re.compile(r'\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b')
-        # Simple structural context name matching (e.g., Dear John Doe, Regards, Jane Smith)
-        self.name_context_regex = re.compile(r'\b(?:Hi|Dear|Regards|Sincerely|Attn|From|To),\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b')
 
-        # 2. Government & Financial Identifiers
         self.ssn_regex = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
-        # Bare 9-digit SSNs (no dashes) are only flagged when a nearby word signals
-        # it's actually a social security number — a naked \d{9} alone would false-positive
-        # on order numbers, zip+4, tracking codes, etc.
         self.ssn_context_keywords = re.compile(r'\b(?:ssn|social security|social)\b', re.IGNORECASE)
         self.ssn_bare_regex = re.compile(r'\b\d{9}\b')
         self.credit_card_regex = re.compile(r'\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{13,16}\b')
 
-        # 3. Credentials & API Keys
-        # Captures keys/passwords followed by alphanumeric/special strings, excluding short placeholders
         self.credential_regex = re.compile(
-            r'\b(?:password|passwd|api_key|secret|token|access_key)\b\s*[:=]\s*["\']?([A-Za-z0-9_\-+=!@#$%^&*./]{8,64})["\']?', 
+            r'\b(?:password|passwd|api_key|secret|token|access_key)\b\s*[:=]\s*["\']?([A-Za-z0-9_\-+=!@#$%^&*./]{8,64})["\']?',
             re.IGNORECASE
         )
 
-        # 4. Medical / Sensitive Personal Info
-        # Strict context-based medical phrases to avoid flagging "wellness meeting"
         self.medical_regex = re.compile(
-            r'\b(?:diagnosed with|tested positive for|medical record|prescription for|patient suffers from)\b\s+([A-Za-z0-9\s]{3,30})\b', 
+            r'\b(?:diagnosed with|tested positive for|medical record|prescription for|patient suffers from)\b\s+([A-Za-z0-9\s]{3,30})\b',
+            re.IGNORECASE
+        )
+
+        # Employee / client / volunteer IDs, matching the format shown in the
+        # orientation deck: EMP-12345, VOL-4821, patient ID style codes.
+        self.org_id_regex = re.compile(r'\b(?:EMP|VOL|CLIENT|PT)-\d{3,6}\b', re.IGNORECASE)
+
+        # Confidential/organizational keyword triggers.
+        self.confidential_keywords = re.compile(
+            r'\b(?:strictly confidential|internal only|do not distribute|confidential|acquisition|roadmap)\b',
             re.IGNORECASE
         )
 
     def _luhn_checksum(self, card_number: str) -> bool:
-        """Validates card strings using the Luhn Algorithm to eliminate false positives."""
         digits = [int(d) for d in re.sub(r'\D', '', card_number)]
         if not digits or len(digits) < 13:
             return False
@@ -49,7 +88,6 @@ class PrivacyAuditorEngine:
         return checksum % 10 == 0
 
     def _calculate_entropy(self, text: str) -> float:
-        """Calculates Shannon Entropy to verify if a string looks like a random cryptographic key."""
         if not text:
             return 0.0
         entropy = 0.0
@@ -58,60 +96,93 @@ class PrivacyAuditorEngine:
             entropy -= p_x * math.log2(p_x)
         return entropy
 
+    def _ml_findings(self, text: str):
+        """Run the NER model and map its entities onto our category schema."""
+        findings = []
+        if not self.use_ml:
+            return findings
+        try:
+            nlp = _get_ner_pipeline()
+        except Exception:
+            # Model unavailable (e.g. no network in this environment) —
+            # fail soft so regex detectors still run rather than crashing
+            # the whole app. This should not happen in the deployed app,
+            # which has normal internet access to download the model once.
+            return findings
+
+        for ent in nlp(text):
+            group = ent.get("entity_group")
+            category = self.NER_CATEGORY_MAP.get(group)
+            if category is None:
+                continue
+            findings.append({
+                'start': ent['start'],
+                'end': ent['end'],
+                'category': category,
+                'value': text[ent['start']:ent['end']],
+                'reason': f'Detected by NER model (dslim/bert-base-NER) as a {group} entity — '
+                          f'may identify an individual or organization.',
+                'source': 'ml',
+                'confidence': float(ent.get('score', 0.0)),
+            })
+        return findings
+
     def audit_text(self, text: str):
         findings = []
 
-        # Category 1: Contact/Names
-        for match in self.email_regex.finditer(text):
-            findings.append({'start': match.start(), 'end': match.end(), 'category': 'CONTACT_INFO', 'value': match.group(), 'reason': 'Exposes direct personal communication endpoints.'})
-        for match in self.phone_regex.finditer(text):
-            findings.append({'start': match.start(), 'end': match.end(), 'category': 'CONTACT_INFO', 'value': match.group(), 'reason': 'Exposes direct phone details.'})
-        for match in self.name_context_regex.finditer(text):
-            findings.append({'start': match.start(1), 'end': match.end(1), 'category': 'NAME', 'value': match.group(1), 'reason': 'Identified individual identifier via surrounding conversational cues.'})
+        # --- ML: names and organizations (core detection) ---
+        findings.extend(self._ml_findings(text))
 
-        # Category 2: Gov/Financial
+        # --- Regex/validation: contact info ---
+        for match in self.email_regex.finditer(text):
+            findings.append({'start': match.start(), 'end': match.end(), 'category': 'CONTACT_INFO', 'value': match.group(), 'reason': 'Exposes direct personal communication endpoints.', 'source': 'regex'})
+        for match in self.phone_regex.finditer(text):
+            findings.append({'start': match.start(), 'end': match.end(), 'category': 'CONTACT_INFO', 'value': match.group(), 'reason': 'Exposes direct phone details.', 'source': 'regex'})
+
+        # --- Regex/validation: government & financial identifiers ---
         for match in self.ssn_regex.finditer(text):
-            findings.append({'start': match.start(), 'end': match.end(), 'category': 'GOVT_IDENTIFIER', 'value': match.group(), 'reason': 'Social Security Numbers can lead to extreme identity theft threats.'})
+            findings.append({'start': match.start(), 'end': match.end(), 'category': 'GOVT_IDENTIFIER', 'value': match.group(), 'reason': 'Social Security Numbers can lead to extreme identity theft threats.', 'source': 'regex'})
         for match in self.ssn_bare_regex.finditer(text):
-            # Only flag a bare 9-digit number if an SSN-signaling keyword appears
-            # within a 30-character window before it (proximity, not whole-text scan,
-            # so an unrelated 9-digit ID elsewhere in a long doc isn't dragged in).
             window_start = max(0, match.start() - 30)
             window = text[window_start:match.start()]
             if self.ssn_context_keywords.search(window):
-                findings.append({'start': match.start(), 'end': match.end(), 'category': 'GOVT_IDENTIFIER', 'value': match.group(), 'reason': 'Social Security Number (unformatted) found near an SSN-signaling keyword.'})
+                findings.append({'start': match.start(), 'end': match.end(), 'category': 'GOVT_IDENTIFIER', 'value': match.group(), 'reason': 'Social Security Number (unformatted) found near an SSN-signaling keyword.', 'source': 'regex'})
         for match in self.credit_card_regex.finditer(text):
             val = match.group()
             if self._luhn_checksum(val):
-                findings.append({'start': match.start(), 'end': match.end(), 'category': 'FINANCIAL_IDENTIFIER', 'value': val, 'reason': 'Valid financial payment card detected via Luhn checksum verification.'})
+                findings.append({'start': match.start(), 'end': match.end(), 'category': 'FINANCIAL_IDENTIFIER', 'value': val, 'reason': 'Valid financial payment card detected via Luhn checksum verification.', 'source': 'regex'})
 
-        # Category 3: Credentials
+        # --- Regex/validation: credentials ---
         for match in self.credential_regex.finditer(text):
             val = match.group(1)
-            # Ensure the captured value has enough character diversity (entropy) to look like a real credential
             if self._calculate_entropy(val) > 3.0:
-                findings.append({'start': match.start(1), 'end': match.end(1), 'category': 'CREDENTIALS', 'value': val, 'reason': 'High-entropy secret key or operational password footprint.'})
+                findings.append({'start': match.start(1), 'end': match.end(1), 'category': 'CREDENTIALS', 'value': val, 'reason': 'High-entropy secret key or operational password footprint.', 'source': 'regex'})
 
-        # Category 4: Medical Info
+        # --- Regex/validation: medical info ---
         for match in self.medical_regex.finditer(text):
-            findings.append({'start': match.start(1), 'end': match.end(1), 'category': 'MEDICAL_INFO', 'value': match.group(1), 'reason': 'Contains protected health data tied directly to an active context.'})
+            findings.append({'start': match.start(1), 'end': match.end(1), 'category': 'MEDICAL_INFO', 'value': match.group(1), 'reason': 'Contains protected health data tied directly to an active context.', 'source': 'regex'})
 
-        # Sort matches and resolve overlaps (Keep the longest match)
+        # --- Regex: employee/client/volunteer IDs ---
+        for match in self.org_id_regex.finditer(text):
+            findings.append({'start': match.start(), 'end': match.end(), 'category': 'EMPLOYEE_INFO', 'value': match.group(), 'reason': 'Internal employee, volunteer, or client identifier.', 'source': 'regex'})
+
+        # --- Regex: confidential organizational info ---
+        for match in self.confidential_keywords.finditer(text):
+            findings.append({'start': match.start(), 'end': match.end(), 'category': 'CONFIDENTIAL_INFO', 'value': match.group(), 'reason': 'Signals confidential or pre-announcement organizational information.', 'source': 'regex'})
+
+        # Sort and resolve overlaps: longest match wins; ML and regex findings
+        # compete on equal footing at this stage.
         findings = sorted(findings, key=lambda x: (x['start'], -(x['end'] - x['start'])))
         cleaned_findings = []
         last_end = -1
-        
         for f in findings:
             if f['start'] >= last_end:
                 cleaned_findings.append(f)
                 last_end = f['end']
-                
+
         return cleaned_findings
 
     def highlight_html(self, text: str, findings) -> str:
-        """Builds an HTML string with the ORIGINAL text, wrapping each finding in a
-        <mark> span colored by category, so the user sees exactly what was flagged
-        in place, before any redaction happens."""
         import html as _html
         sorted_findings = sorted(findings, key=lambda x: x['start'])
         out = []
@@ -128,8 +199,6 @@ class PrivacyAuditorEngine:
         return "".join(out)
 
     def redact_text(self, text: str, findings) -> str:
-        """Applies smart placeholders onto sensitive regions safely without over-redacting."""
-        # Reverse sort by start index to prevent shifting character positions while editing
         sorted_findings = sorted(findings, key=lambda x: x['start'], reverse=True)
         redacted = text
         for f in sorted_findings:
