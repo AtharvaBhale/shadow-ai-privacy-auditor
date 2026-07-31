@@ -12,12 +12,17 @@ class PrivacyAuditorEngine:
 
         # 2. Government & Financial Identifiers
         self.ssn_regex = re.compile(r'\b\d{3}-\d{2}-\d{4}\b')
+        # Bare 9-digit SSNs (no dashes) are only flagged when a nearby word signals
+        # it's actually a social security number — a naked \d{9} alone would false-positive
+        # on order numbers, zip+4, tracking codes, etc.
+        self.ssn_context_keywords = re.compile(r'\b(?:ssn|social security|social)\b', re.IGNORECASE)
+        self.ssn_bare_regex = re.compile(r'\b\d{9}\b')
         self.credit_card_regex = re.compile(r'\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{13,16}\b')
 
         # 3. Credentials & API Keys
         # Captures keys/passwords followed by alphanumeric/special strings, excluding short placeholders
         self.credential_regex = re.compile(
-            r'\b(?:password|passwd|api_key|secret|token|access_key)\b\s*[:=]\s*["\']?([A-Za-z0-9_\-+=]{8,64})["\']?', 
+            r'\b(?:password|passwd|api_key|secret|token|access_key)\b\s*[:=]\s*["\']?([A-Za-z0-9_\-+=!@#$%^&*./]{8,64})["\']?', 
             re.IGNORECASE
         )
 
@@ -67,6 +72,14 @@ class PrivacyAuditorEngine:
         # Category 2: Gov/Financial
         for match in self.ssn_regex.finditer(text):
             findings.append({'start': match.start(), 'end': match.end(), 'category': 'GOVT_IDENTIFIER', 'value': match.group(), 'reason': 'Social Security Numbers can lead to extreme identity theft threats.'})
+        for match in self.ssn_bare_regex.finditer(text):
+            # Only flag a bare 9-digit number if an SSN-signaling keyword appears
+            # within a 30-character window before it (proximity, not whole-text scan,
+            # so an unrelated 9-digit ID elsewhere in a long doc isn't dragged in).
+            window_start = max(0, match.start() - 30)
+            window = text[window_start:match.start()]
+            if self.ssn_context_keywords.search(window):
+                findings.append({'start': match.start(), 'end': match.end(), 'category': 'GOVT_IDENTIFIER', 'value': match.group(), 'reason': 'Social Security Number (unformatted) found near an SSN-signaling keyword.'})
         for match in self.credit_card_regex.finditer(text):
             val = match.group()
             if self._luhn_checksum(val):

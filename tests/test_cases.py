@@ -10,12 +10,14 @@ TEST_CASES = [
     ("We should emphasize general wellness programs during our next cross-department gathering.", []),
     ("May will present the roadmap update at Monday's stand-up.", []),  # common name-as-word, no salutation context
     ("The password policy requires at least 12 characters, but no password is shared here.", []),
+    ("Tracking number 987654321 was shipped to the warehouse today.", []),  # unrelated 9-digit number, no SSN context
 
     # ---- RISKY cases: must trigger the listed category(ies) ----
     ("Regards, Alice Smith - let me know if you received the document.", ["NAME"]),
     ("Send the invoice update tracking log over to realuser@fictionalcompany.org immediately.", ["CONTACT_INFO"]),
     ("Reach out to my desk line directly at 555-829-1042 for verification.", ["CONTACT_INFO"]),
     ("Employee payroll setup requires verification of SSN 000-12-3456.", ["GOVT_IDENTIFIER"]),
+    ("His social is 111223333 for the background check.", ["GOVT_IDENTIFIER"]),
     ("Do not share the master AWS database key: api_key='amzn-p29K_mQx+v83=L' with internal teams.", ["CREDENTIALS"]),
     ("He was recently diagnosed with severe asthma according to the file.", ["MEDICAL_INFO"]),
     ("The checkout terminal accepted payment card 4000-1234-5678-9009.", ["FINANCIAL_IDENTIFIER"]),
