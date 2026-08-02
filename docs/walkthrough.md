@@ -1,12 +1,18 @@
 # Walkthrough Video
 
-> **Add your walkthrough video link here before submission.**
+**Video Link:** [paste your recording link here]
 
-**Video Link:** <!-- e.g. https://www.loom.com/share/your-video-id -->
+**Live App:** https://ai-privacy-auditor.streamlit.app/
 
-The video should be ~5 minutes and cover:
-- A live demo of your deployed tool
-- A risky example being detected, explained, and safely redacted
-- A safe example being correctly left unchanged (no over-redaction)
-- A brief walkthrough of your detection approach and key technical decisions
-- Any tradeoffs or things you'd do differently with more time
+**Metrics (16 labeled fictional test cases):** Precision 1.000 | Recall 0.933 | F1 0.966 (15/16 exact-match)
+
+The video covers:
+- What the tool does and why (Shadow AI privacy auditing before pasting text into public AI tools)
+- Detection approach: spaCy NER for names, regex + validation (Luhn, entropy, keyword proximity) for 
+  the other 5 categories
+- A risky example detected, explained, and redacted live
+- A safe example correctly left unchanged (no over-redaction)
+- The BERT → spaCy model swap, prompted by a deployment memory-limit failure caught via manual testing
+- AI usage: Claude used for development (debugging, regex review, test case generation) — no AI called 
+  at runtime
+- Known limitations: NAME detection can miss short/embedded name fragments; details in model_card.md
