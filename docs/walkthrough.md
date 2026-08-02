@@ -1,10 +1,12 @@
 # Walkthrough Video
 
-**Video Link:** https://www.loom.com/share/c7851a0943204d99b4d5ed009aea4a71
+**Main Walkthrough Video:** https://www.loom.com/share/c7851a0943204d99b4d5ed009aea4a71
+
+**Tier 2 Addendum (browser extension, severity scoring, custom rules, live scanning, multilingual):** https://www.loom.com/share/d3558d78104344e5a82ee806a2c1b12a
 
 **Live App:** https://ai-privacy-auditor.streamlit.app/
 
-**Metrics (16 labeled fictional test cases):** Precision 1.000 | Recall 0.933 | F1 0.966 (15/16 exact-match)
+**Metrics (20 labeled fictional test cases):** Precision 1.000 | Recall 0.947 | F1 0.973 (19/20 exact-match)
 
 The video covers:
 - What the tool does and why (Shadow AI privacy auditing before pasting text into public AI tools)
