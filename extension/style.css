@@ -1,0 +1,75 @@
+#shadow-ai-auditor-panel {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: #14171C;
+  color: #E8E6E1;
+  border: 1px solid #2A2E36;
+  border-radius: 8px;
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
+  font-size: 12px;
+  z-index: 999999;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
+
+#saa-header {
+  padding: 10px 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid #2A2E36;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#saa-body {
+  padding: 10px 12px;
+}
+
+#saa-empty {
+  color: #7FD4AE;
+  font-size: 11px;
+}
+
+.saa-finding {
+  border-left: 3px solid #2A2E36;
+  background: #1B1F26;
+  border-radius: 0 4px 4px 0;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+
+.saa-cat {
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.saa-sev {
+  float: right;
+  font-size: 9px;
+  text-transform: uppercase;
+  border: 1px solid;
+  border-radius: 2px;
+  padding: 0 4px;
+}
+
+.saa-reason {
+  color: #B8BCC4;
+  font-size: 10px;
+  margin-top: 3px;
+  clear: both;
+}
+
+.saa-note {
+  color: #8A8F98;
+  font-size: 9px;
+  font-style: italic;
+  margin-top: 6px;
+  border-top: 1px solid #2A2E36;
+  padding-top: 6px;
+}

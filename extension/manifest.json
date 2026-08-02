@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Shadow AI Privacy Auditor — ChatGPT Guard",
+  "version": "1.0.0",
+  "description": "Warns before you paste sensitive information into ChatGPT. Detection runs entirely in your browser — nothing is sent anywhere.",
+  "permissions": [],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": ["detectors.js", "content.js"],
+      "css": ["style.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
