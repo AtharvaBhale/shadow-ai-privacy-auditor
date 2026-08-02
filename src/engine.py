@@ -89,13 +89,23 @@ class PrivacyAuditorEngine:
         self.ssn_bare_regex = re.compile(r'\b\d{9}\b')
         self.credit_card_regex = re.compile(r'\b(?:\d{4}[-\s]?){3}\d{4}\b|\b\d{13,16}\b')
 
+        # Tier 2: credential keywords extended with Spanish equivalents
+        # (contraseña = password, clave de acceso = access key). Numeric/
+        # symbolic patterns (email, phone, SSN, credit card) are already
+        # language-agnostic and need no translation.
         self.credential_regex = re.compile(
-            r'\b(?:password|passwd|api_key|secret|token|access_key)\b\s*[:=]\s*["\']?([A-Za-z0-9_\-+=!@#$%^&*./]{8,64})["\']?',
+            r'\b(?:password|passwd|api_key|secret|token|access_key|contraseña|clave de acceso)\b\s*[:=]\s*["\']?([A-Za-z0-9_\-+=!@#$%^&*./]{8,64})["\']?',
             re.IGNORECASE
         )
 
+        # Tier 2: medical trigger phrases extended with Spanish equivalents
+        # (diagnosticado con = diagnosed with, dio positivo por = tested
+        # positive for, receta para = prescription for). This is a scoped,
+        # single-additional-language extension — not full multilingual
+        # coverage — documented as such in docs/model_card.md.
         self.medical_regex = re.compile(
-            r'\b(?:diagnosed with|tested positive for|medical record|prescription for|patient suffers from)\b\s+([A-Za-z0-9\s]{3,30})\b',
+            r'\b(?:diagnosed with|tested positive for|medical record|prescription for|patient suffers from'
+            r'|diagnosticado con|dio positivo por|expediente médico|receta para)\b\s+([A-Za-zÀ-ÿ0-9\s]{3,30})\b',
             re.IGNORECASE
         )
 
@@ -103,9 +113,11 @@ class PrivacyAuditorEngine:
         # orientation deck: EMP-12345, VOL-4821, patient ID style codes.
         self.org_id_regex = re.compile(r'\b(?:EMP|VOL|CLIENT|PT)-\d{3,6}\b', re.IGNORECASE)
 
-        # Confidential/organizational keyword triggers.
+        # Confidential/organizational keyword triggers, extended with
+        # Spanish equivalents (confidencial, no distribuir, adquisición).
         self.confidential_keywords = re.compile(
-            r'\b(?:strictly confidential|internal only|do not distribute|confidential|acquisition|roadmap)\b',
+            r'\b(?:strictly confidential|internal only|do not distribute|confidential|acquisition|roadmap'
+            r'|estrictamente confidencial|no distribuir|confidencial|adquisición)\b',
             re.IGNORECASE
         )
 

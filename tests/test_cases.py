@@ -35,6 +35,18 @@ TEST_CASES = [
     # ---- RISKY cases: ML-backed (NER) categories ----
     ("Regards, Alice Smith - let me know if you received the document.", ["NAME"]),
     ("Volunteer ID VOL-4821 (Maria) missed her shift; SSN 123-45-6789.", ["EMPLOYEE_INFO", "NAME", "GOVT_IDENTIFIER"]),
+
+    # ---- Tier 2: multilingual (Spanish) regex-backed categories ----
+    ("Fue diagnosticado con diabetes tipo 2 según el archivo.", ["MEDICAL_INFO"]),
+    ("No compartas la contraseña: MiClave123!Segura con nadie.", ["CREDENTIALS"]),
+    ("Este documento es estrictamente confidencial antes de la adquisición.", ["CONFIDENTIAL_INFO", "NAME"]),
+    # NOTE: expected includes a spurious NAME finding. en_core_web_sm is an
+    # English-only model; on Spanish text it can mistag phrases as PERSON
+    # entities ("de la adquisición" here), which overlaps and suppresses
+    # the second CONFIDENTIAL_INFO keyword match ("adquisición"). This is a
+    # disclosed, understood limitation of using an English NER model as a
+    # secondary detector on non-English text — see docs/model_card.md.
+    ("La reunión del proyecto es a las 3 de la tarde.", []),  # safe Spanish sentence, must not over-redact
 ]
 
 

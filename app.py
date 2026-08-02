@@ -215,16 +215,39 @@ with col1:
         height=280,
         placeholder="Dear John Doe, the password to database alpha is 'k9#mPq2_zL' and my contact is test@company.com...",
         label_visibility="collapsed",
+        key="source_text_input",
     )
-    run_audit = st.button("Run audit", type="primary", use_container_width=True)
 
-    if run_audit and raw_input.strip():
-        findings = engine.audit_text(raw_input, custom_rules=st.session_state.custom_rules)
-        st.session_state.last_findings = findings
-        st.session_state.last_text = raw_input
-        st.session_state.ml_available = engine.ml_available
-    elif run_audit:
-        st.session_state.last_findings = None
+    live_mode = st.checkbox(
+        "🔴 Live scanning — audit automatically as text changes (no button click needed)",
+        value=False,
+        key="live_mode",
+    )
+
+    if live_mode:
+        # Tier 2: real-time monitoring. Streamlit reruns the script whenever
+        # a widget value changes (text_area commits on blur / Ctrl+Enter),
+        # so re-auditing on every rerun where the text differs from what was
+        # last audited gives "as you type" behavior without a manual click,
+        # without needing a separate polling loop or websocket.
+        if raw_input.strip() and raw_input != st.session_state.get("last_text"):
+            findings = engine.audit_text(raw_input, custom_rules=st.session_state.custom_rules)
+            st.session_state.last_findings = findings
+            st.session_state.last_text = raw_input
+            st.session_state.ml_available = engine.ml_available
+        elif not raw_input.strip():
+            st.session_state.last_findings = None
+        run_audit = False  # button below is hidden in live mode
+    else:
+        run_audit = st.button("Run audit", type="primary", use_container_width=True)
+
+        if run_audit and raw_input.strip():
+            findings = engine.audit_text(raw_input, custom_rules=st.session_state.custom_rules)
+            st.session_state.last_findings = findings
+            st.session_state.last_text = raw_input
+            st.session_state.ml_available = engine.ml_available
+        elif run_audit:
+            st.session_state.last_findings = None
 
     if st.session_state.get("ml_available") is False:
         st.warning(
