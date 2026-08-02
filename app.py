@@ -166,7 +166,7 @@ st.markdown('<div class="sa-header">Community Dreams Foundation // Shadow AI Hac
 st.markdown('<div class="sa-title">PRIVACY <span>AUDITOR</span></div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sa-sub">Scan text for sensitive information before it leaves your hands for a public AI tool. '
-    'Nothing here is sent anywhere — detection runs entirely on pattern matching, in this session.</div>',
+    'Nothing here is sent anywhere — a local NER model and pattern/validation rules run entirely on this machine, in this session.</div>',
     unsafe_allow_html=True,
 )
 

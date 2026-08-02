@@ -27,6 +27,8 @@ python test_cases.py
 
 This prints per-case pass/fail plus aggregate precision, recall, and F1 across all labeled categories in the set.
 
+**Known false positive, documented rather than papered over.** On `"Volunteer ID VOL-4821 (Maria) missed her shift; SSN 123-45-6789."`, the model tags an extra low-confidence `ORG` entity that isn't a real organization. A confidence threshold (0.85) was tried to filter this out; it also suppressed the correct `NAME` detection for "Maria" in the same sentence, trading recall for no net precision gain. The threshold was reverted. With the hackathon deadline close, this is disclosed as a known limitation rather than chased further — see `docs/reflection.md`.
+
 ## Limitations
 
 - `dslim/bert-base-NER` was trained on CoNLL-2003 (Reuters news text from the 1990s). Its accuracy on informal chat-style text, unusual names, or non-Western names is weaker than on the news-style text it was trained on — a known limitation, not something this integration works around.

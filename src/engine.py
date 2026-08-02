@@ -115,6 +115,7 @@ class PrivacyAuditorEngine:
             category = self.NER_CATEGORY_MAP.get(group)
             if category is None:
                 continue
+            score = float(ent.get('score', 0.0))
             findings.append({
                 'start': ent['start'],
                 'end': ent['end'],
@@ -123,7 +124,7 @@ class PrivacyAuditorEngine:
                 'reason': f'Detected by NER model (dslim/bert-base-NER) as a {group} entity — '
                           f'may identify an individual or organization.',
                 'source': 'ml',
-                'confidence': float(ent.get('score', 0.0)),
+                'confidence': score,
             })
         return findings
 
