@@ -167,7 +167,15 @@ class PrivacyAuditorEngine:
             })
         return findings
 
-    def audit_text(self, text: str):
+    def audit_text(self, text: str, custom_rules=None):
+        """
+        custom_rules (Tier 2): optional list of user-defined rule dicts,
+        each shaped like {'pattern': <regex string>, 'category': <label>,
+        'reason': <explanation>, 'severity': 'high'|'medium'|'low'}.
+        Lets a user extend detection at runtime without touching source
+        code. Invalid regex patterns are skipped rather than raising, so
+        one bad custom rule can't break the whole audit.
+        """
         findings = []
 
         # --- ML: names and organizations (core detection) ---
@@ -210,6 +218,28 @@ class PrivacyAuditorEngine:
         for match in self.confidential_keywords.finditer(text):
             findings.append({'start': match.start(), 'end': match.end(), 'category': 'CONFIDENTIAL_INFO', 'value': match.group(), 'reason': 'Signals confidential or pre-announcement organizational information.', 'source': 'regex'})
 
+        # --- Tier 2: user-defined custom rules ---
+        for rule in (custom_rules or []):
+            pattern = rule.get('pattern', '')
+            category = rule.get('category', 'CUSTOM')
+            reason = rule.get('reason', 'Matches a user-defined custom rule.')
+            try:
+                compiled = re.compile(pattern, re.IGNORECASE)
+            except re.error:
+                # Invalid regex from the user — skip this rule rather than
+                # crash the whole audit.
+                continue
+            for match in compiled.finditer(text):
+                findings.append({
+                    'start': match.start(),
+                    'end': match.end(),
+                    'category': category,
+                    'value': match.group(),
+                    'reason': reason,
+                    'source': 'custom',
+                    'custom_severity': rule.get('severity'),
+                })
+
         # Sort and resolve overlaps: longest match wins; ML and regex findings
         # compete on equal footing at this stage.
         findings = sorted(findings, key=lambda x: (x['start'], -(x['end'] - x['start'])))
@@ -221,9 +251,14 @@ class PrivacyAuditorEngine:
                 last_end = f['end']
 
         # Tier 2: tag every finding with a severity level, one place, applied
-        # uniformly regardless of whether it came from the ML model or regex.
+        # uniformly regardless of whether it came from the ML model, regex,
+        # or a user-defined custom rule. Custom rules may specify their own
+        # severity; otherwise default to 'medium' for unknown categories.
         for f in cleaned_findings:
-            f['severity'] = self.SEVERITY_MAP.get(f['category'], 'low')
+            if f.get('source') == 'custom' and f.get('custom_severity') in self.SEVERITY_SCORE:
+                f['severity'] = f['custom_severity']
+            else:
+                f['severity'] = self.SEVERITY_MAP.get(f['category'], 'medium')
 
         return cleaned_findings
 

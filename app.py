@@ -176,8 +176,40 @@ engine = st.session_state.engine
 
 col1, col2 = st.columns(2, gap="large")
 
+if "custom_rules" not in st.session_state:
+    st.session_state.custom_rules = []
+
 with col1:
     st.markdown('<div class="sa-panel-label">01 / Source text</div>', unsafe_allow_html=True)
+
+    with st.expander(f"⚙ Custom rules ({len(st.session_state.custom_rules)} active)"):
+        st.caption("Add your own regex or keyword pattern to extend detection at runtime — no code changes needed.")
+        with st.form("add_custom_rule", clear_on_submit=True):
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                rule_pattern = st.text_input("Pattern (regex or plain keyword)", placeholder=r"PROJECT-[A-Z]+")
+            with rc2:
+                rule_category = st.text_input("Category label", placeholder="INTERNAL_CODENAME")
+            rule_reason = st.text_input("Reason (why this is risky)", placeholder="Unannounced internal project codename.")
+            rule_severity = st.selectbox("Severity", ["high", "medium", "low"], index=1)
+            submitted = st.form_submit_button("Add rule", use_container_width=True)
+            if submitted and rule_pattern.strip() and rule_category.strip():
+                st.session_state.custom_rules.append({
+                    "pattern": rule_pattern.strip(),
+                    "category": rule_category.strip().upper().replace(" ", "_"),
+                    "reason": rule_reason.strip() or "Matches a user-defined custom rule.",
+                    "severity": rule_severity,
+                })
+
+        for i, rule in enumerate(st.session_state.custom_rules):
+            rcol1, rcol2 = st.columns([0.85, 0.15])
+            with rcol1:
+                st.caption(f"`{rule['pattern']}` → **{rule['category']}** ({rule['severity']})")
+            with rcol2:
+                if st.button("✕", key=f"remove_rule_{i}"):
+                    st.session_state.custom_rules.pop(i)
+                    st.rerun()
+
     raw_input = st.text_area(
         "source_text",
         height=280,
@@ -187,7 +219,7 @@ with col1:
     run_audit = st.button("Run audit", type="primary", use_container_width=True)
 
     if run_audit and raw_input.strip():
-        findings = engine.audit_text(raw_input)
+        findings = engine.audit_text(raw_input, custom_rules=st.session_state.custom_rules)
         st.session_state.last_findings = findings
         st.session_state.last_text = raw_input
         st.session_state.ml_available = engine.ml_available
@@ -260,25 +292,44 @@ with col2:
                 unsafe_allow_html=True,
             )
 
-            st.markdown(f'<div class="sa-panel-label">{len(findings)} finding(s)</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="sa-panel-label">{len(findings)} finding(s) — uncheck to keep as-is</div>', unsafe_allow_html=True)
             severity_badge_colors = {"high": "#E4572E", "medium": "#F2A541", "low": "#4FB0A5"}
-            for f in findings:
+
+            # Tier 2: per-finding keep/redact control. Each finding gets a
+            # stable key derived from its position + category so toggles
+            # don't shift if the user edits the input text and re-runs.
+            selected_indices = []
+            for i, f in enumerate(findings):
                 color = CATEGORY_COLORS.get(f["category"], "#8A8F98")
                 label = CATEGORY_LABELS.get(f["category"], f["category"])
                 sev = f.get("severity", "low")
                 sev_color = severity_badge_colors.get(sev, "#8A8F98")
-                st.markdown(
-                    f'<div class="sa-finding-row" style="border-left-color:{color};">'
-                    f'<span class="sa-finding-cat" style="color:{color};">{label}</span>'
-                    f'<span style="float:right; font-family:\'IBM Plex Mono\',monospace; font-size:0.7rem; '
-                    f'text-transform:uppercase; color:{sev_color}; border:1px solid {sev_color}; '
-                    f'padding:0.1rem 0.4rem; border-radius:2px;">{sev}</span>'
-                    f'<div class="sa-finding-reason">{f["reason"]}</div>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+
+                row_col1, row_col2 = st.columns([0.12, 0.88])
+                finding_key = f"redact_{i}_{f['start']}_{f['end']}_{f['category']}"
+                with row_col1:
+                    redact_this = st.checkbox("Redact", value=True, key=finding_key, label_visibility="collapsed")
+                with row_col2:
+                    st.markdown(
+                        f'<div class="sa-finding-row" style="border-left-color:{color}; margin-bottom:0.3rem;">'
+                        f'<span class="sa-finding-cat" style="color:{color};">{label}</span>'
+                        f'<span style="float:right; font-family:\'IBM Plex Mono\',monospace; font-size:0.7rem; '
+                        f'text-transform:uppercase; color:{sev_color}; border:1px solid {sev_color}; '
+                        f'padding:0.1rem 0.4rem; border-radius:2px;">{sev}</span>'
+                        f'<div class="sa-finding-reason">{f["reason"]}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                if redact_this:
+                    selected_indices.append(i)
+
+            findings_to_redact = [findings[i] for i in selected_indices]
 
             st.markdown('<div class="sa-panel-label" style="margin-top:1.2rem;">Redacted — safe to share</div>', unsafe_allow_html=True)
-            redacted = engine.redact_text(text, findings)
-            st.text_area("redacted_output", value=redacted, height=180, label_visibility="collapsed")
-            st.download_button("Copy / download safe text", data=redacted, file_name="redacted_output.txt", use_container_width=True)
+            redacted = engine.redact_text(text, findings_to_redact)
+            if len(findings_to_redact) < len(findings):
+                st.caption(f"{len(findings) - len(findings_to_redact)} finding(s) kept as-is per your selection above.")
+            # st.code renders a built-in one-click copy icon in the top-right
+            # corner — this is the "one-click copy safe text" control.
+            st.code(redacted, language=None, wrap_lines=True)
+            st.download_button("Download safe text as .txt", data=redacted, file_name="redacted_output.txt", use_container_width=True)
