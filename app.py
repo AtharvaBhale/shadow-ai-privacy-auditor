@@ -190,8 +190,18 @@ with col1:
         findings = engine.audit_text(raw_input)
         st.session_state.last_findings = findings
         st.session_state.last_text = raw_input
+        st.session_state.ml_available = engine.ml_available
     elif run_audit:
         st.session_state.last_findings = None
+
+    if st.session_state.get("ml_available") is False:
+        st.warning(
+            "⚠️ NAME detection is unavailable right now — the ML model (spaCy) failed to load. "
+            "All other categories (contact info, government/financial IDs, credentials, medical, "
+            "employee/client, confidential org info) are still fully active. "
+            "See docs/model_card.md for troubleshooting.",
+            icon="⚠️",
+        )
 
     if st.session_state.get("last_findings") is not None:
         st.markdown('<div class="sa-panel-label" style="margin-top:1.4rem;">Marked original</div>', unsafe_allow_html=True)
@@ -231,13 +241,38 @@ with col2:
                 unsafe_allow_html=True,
             )
         else:
+            risk = engine.risk_score(findings)
+            risk_colors = {
+                "Critical": "#E4572E",
+                "High": "#E4572E",
+                "Medium": "#F2A541",
+                "Low": "#4FB0A5",
+                "Clean": "#4FB0A5",
+            }
+            risk_color = risk_colors.get(risk["label"], "#8A8F98")
+            st.markdown(
+                f'<div class="sa-finding-row" style="border-left-color:{risk_color}; margin-bottom:1rem;">'
+                f'<span class="sa-finding-cat" style="color:{risk_color}; font-size:0.95rem;">'
+                f'Overall risk: {risk["label"]} (score {risk["weighted_score"]})</span>'
+                f'<div class="sa-finding-reason">'
+                f'{risk["counts"]["high"]} high · {risk["counts"]["medium"]} medium · {risk["counts"]["low"]} low severity finding(s)'
+                f'</div></div>',
+                unsafe_allow_html=True,
+            )
+
             st.markdown(f'<div class="sa-panel-label">{len(findings)} finding(s)</div>', unsafe_allow_html=True)
+            severity_badge_colors = {"high": "#E4572E", "medium": "#F2A541", "low": "#4FB0A5"}
             for f in findings:
                 color = CATEGORY_COLORS.get(f["category"], "#8A8F98")
                 label = CATEGORY_LABELS.get(f["category"], f["category"])
+                sev = f.get("severity", "low")
+                sev_color = severity_badge_colors.get(sev, "#8A8F98")
                 st.markdown(
                     f'<div class="sa-finding-row" style="border-left-color:{color};">'
                     f'<span class="sa-finding-cat" style="color:{color};">{label}</span>'
+                    f'<span style="float:right; font-family:\'IBM Plex Mono\',monospace; font-size:0.7rem; '
+                    f'text-transform:uppercase; color:{sev_color}; border:1px solid {sev_color}; '
+                    f'padding:0.1rem 0.4rem; border-radius:2px;">{sev}</span>'
                     f'<div class="sa-finding-reason">{f["reason"]}</div>'
                     f'</div>',
                     unsafe_allow_html=True,

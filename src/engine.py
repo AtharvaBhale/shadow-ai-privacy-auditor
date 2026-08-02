@@ -3,7 +3,7 @@ import re
 import math
 
 # ---------------------------------------------------------------------------
-# ML model: dslim/bert-base-NER (Hugging Face, Apache 2.0, free, no API key).
+# ML model: spaCy en_core_web_sm (MIT license, free, no API key, no torch).
 # Loaded lazily and cached so the app doesn't pay model-load cost on every
 # audit call, and so importing this module doesn't require the model to be
 # present (keeps unit tests fast / offline-safe).
@@ -50,8 +50,35 @@ class PrivacyAuditorEngine:
         "PERSON": "NAME",
     }
 
+    # Tier 2: severity weight per category, for risk scoring. Credentials
+    # and financial/government identifiers carry the highest real-world
+    # harm (account takeover, identity theft, direct financial loss) so
+    # they're weighted "high." Medical and confidential-org info are
+    # "medium" (serious but usually not immediately exploitable on their
+    # own). Name/contact info alone is "low" (identifying but not
+    # inherently exploitable without other data).
+    SEVERITY_MAP = {
+        "CREDENTIALS": "high",
+        "FINANCIAL_IDENTIFIER": "high",
+        "GOVT_IDENTIFIER": "high",
+        "MEDICAL_INFO": "medium",
+        "EMPLOYEE_INFO": "medium",
+        "CONFIDENTIAL_INFO": "medium",
+        "NAME": "low",
+        "CONTACT_INFO": "low",
+    }
+    SEVERITY_SCORE = {"high": 3, "medium": 2, "low": 1}
+
     def __init__(self, use_ml: bool = True):
         self.use_ml = use_ml
+        # Tracks whether the ML model is actually available and working.
+        # None = not checked yet, True = loaded fine, False = load failed.
+        # This exists specifically so a broken/missing model produces a
+        # VISIBLE warning in the UI instead of silently returning zero NAME
+        # findings — this exact silent failure cost real debugging time
+        # twice during development (once on a memory-constrained deploy
+        # host, once from a missing local dependency).
+        self.ml_available = None
 
         # --- Structured / rule-based detectors (support the ML model) ---
         self.email_regex = re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b')
@@ -109,14 +136,18 @@ class PrivacyAuditorEngine:
         """Run the NER model and map its entities onto our category schema."""
         findings = []
         if not self.use_ml:
+            self.ml_available = False
             return findings
         try:
             nlp = _get_ner_pipeline()
-        except Exception:
+            self.ml_available = True
+        except Exception as e:
             # Model unavailable — fail soft so regex detectors still run
-            # rather than crashing the whole app. Should not happen in the
-            # deployed app; en_core_web_sm is bundled via requirements.txt
-            # and loads without any network call at runtime.
+            # rather than crashing the whole app, but record WHY so the UI
+            # can surface a visible warning instead of silently returning
+            # zero NAME findings.
+            self.ml_available = False
+            self.ml_error = str(e)
             return findings
 
         doc = nlp(text)
@@ -189,7 +220,43 @@ class PrivacyAuditorEngine:
                 cleaned_findings.append(f)
                 last_end = f['end']
 
+        # Tier 2: tag every finding with a severity level, one place, applied
+        # uniformly regardless of whether it came from the ML model or regex.
+        for f in cleaned_findings:
+            f['severity'] = self.SEVERITY_MAP.get(f['category'], 'low')
+
         return cleaned_findings
+
+    def risk_score(self, findings):
+        """
+        Tier 2: an overall risk summary for a whole audited text. Returns a
+        dict with counts per severity level, a total weighted score, and a
+        simple label (Low/Medium/High/Critical) derived from that score.
+        Weighted rather than a plain count so a handful of low-severity
+        findings (e.g. a name and an email) doesn't read the same as a
+        single leaked credential.
+        """
+        counts = {"high": 0, "medium": 0, "low": 0}
+        for f in findings:
+            counts[f.get('severity', 'low')] += 1
+
+        weighted_total = sum(self.SEVERITY_SCORE[level] * n for level, n in counts.items())
+
+        if counts["high"] >= 1:
+            label = "Critical" if counts["high"] >= 2 else "High"
+        elif counts["medium"] >= 1:
+            label = "Medium"
+        elif counts["low"] >= 1:
+            label = "Low"
+        else:
+            label = "Clean"
+
+        return {
+            "label": label,
+            "weighted_score": weighted_total,
+            "counts": counts,
+            "total_findings": len(findings),
+        }
 
     def highlight_html(self, text: str, findings) -> str:
         import html as _html
