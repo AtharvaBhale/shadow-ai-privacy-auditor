@@ -1,6 +1,6 @@
 # Walkthrough Video
 
-**Video Link:** [paste your recording link here]
+**Video Link:** https://www.loom.com/share/c7851a0943204d99b4d5ed009aea4a71
 
 **Live App:** https://ai-privacy-auditor.streamlit.app/
 
