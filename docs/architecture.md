@@ -2,48 +2,58 @@
 
 ## Final Tech Stack
 
-Python + Streamlit, exactly as planned in `planning.md`. No deviation. `requirements.txt` was trimmed to just `streamlit` — the starting scaffold pulled in `plotly` and `pandas`, neither of which the code imports.
+Python + Streamlit, as planned. Detection is a hybrid of one ML model and several regex/validation detectors — not the original all-regex plan.
+
+**Key libraries:** `streamlit`, `spacy` (+ its `en_core_web_sm` model, installed directly from a wheel URL in `requirements.txt`). No `pandas`/`plotly` (unused, removed early). No `transformers`/`torch` — see below for why that combination was tried and dropped.
 
 ## Folder Structure
 
 ```
 src/
-├── engine.py       # PrivacyAuditorEngine: all detectors, overlap resolution,
-│                   # inline highlight rendering, and redaction
-app.py              # Streamlit UI: input, highlighted preview, findings panel, redacted output
-test_cases.py        # 14 fictional test cases (5 safe, 9 risky) with strict category assertions
+├── engine.py         # PrivacyAuditorEngine: NER-based NAME detection,
+│                     # regex/validation detectors for every other category,
+│                     # overlap resolution, inline highlight rendering, redaction
+app.py                # Streamlit UI: input, highlighted preview, findings panel, redacted output
+test_cases.py         # 16 labeled fictional test cases; strict category assertions
+                      # plus precision/recall/F1 computation (evaluate_metrics())
+model_card.md         # Model choice, rationale, and the BERT→spaCy swap story
 ```
 
-Simpler than the folder layout sketched in `planning.md` (which proposed a `detectors/` package with one module per category). In practice, four detectors plus shared helpers (Luhn, entropy, proximity windows) fit comfortably in a single `engine.py`. Splitting into separate files would have added import overhead without a real readability gain at this size. Worth revisiting only if Tier 2 pushes the file past ~300 lines.
+Simpler than the `detectors/` package sketched in `planning.md` — one file was sufficient at this size.
 
 ## Detection Design
 
-`PrivacyAuditorEngine.audit_text()` runs every detector over the input and returns a list of finding dicts: `{start, end, category, value, reason}`.
+`PrivacyAuditorEngine.audit_text()` runs every detector and returns finding dicts: `{start, end, category, value, reason, source}`.
 
-**Names & contact info** — email and phone via regex. Names are only flagged when they follow a salutation cue (`Dear`, `Regards`, `Hi`, `Sincerely`, `Attn`, `From`, `To`, followed by a comma and a capitalized word or two). This is a deliberate precision-over-recall tradeoff: a plain wordlist of first/last names would flag common words used as names elsewhere in a sentence ("May", "Grace", "Mark"). The tradeoff is documented, not hidden — bare names with no salutation context are a known miss (see Limitations).
+**Names (ML-driven, the core linguistic category)** — spaCy's `en_core_web_sm` NER pipeline detects `PERSON` entities, mapped to the `NAME` category. This is the one category assigned to the model rather than regex, because recognizing a name requires understanding sentence structure, not matching a fixed pattern.
 
-**Government & financial identifiers** — SSNs match the standard `XXX-XX-XXXX` format directly. A second pattern also catches unformatted 9-digit SSNs, but only when a keyword (`SSN`, `social security`, `social`) appears within a 30-character window before the number — this avoids flagging unrelated 9-digit numbers like tracking codes or order IDs. Credit cards match a 13–16 digit pattern and are then validated with a **Luhn checksum**; only checksum-valid numbers are flagged, which eliminates the majority of false positives that a naive digit-count regex would produce.
+**Everything else (regex + validation, supporting the model per the brief's own guidance):**
+- **Contact info** — email/phone regex.
+- **Government/financial identifiers** — SSN via the standard dashed format, plus a bare 9-digit pattern gated on a nearby keyword (`SSN`, `social security`) within a 30-character window, to avoid flagging unrelated 9-digit numbers. Credit cards match a 13–16 digit pattern and are validated with a **Luhn checksum**; only checksum-valid numbers are flagged.
+- **Credentials** — keyword-anchored regex (`password`, `api_key`, `secret`, `token`, `access_key`) whose captured value must pass a **Shannon entropy check** (`> 3.0`), so low-entropy placeholders like `password='password'` don't false-positive.
+- **Medical info** — phrase-anchored regex (`diagnosed with`, `tested positive for`, etc.) rather than bare keywords, so incidental mentions ("clinic newsletter covers asthma awareness") don't trigger.
+- **Employee/client/volunteer info** — ID-code regex (`EMP-#####`, `VOL-#####`, etc.), matching the format shown in the hackathon orientation materials.
+- **Confidential organizational info** — keyword triggers (`confidential`, `internal only`, `acquisition`, `roadmap`, etc.).
 
-**Credentials & API keys** — a keyword-anchored regex (`password`, `api_key`, `secret`, `token`, `access_key` followed by `:` or `=`) captures the value, which must then pass a **Shannon entropy check** (`> 3.0`). This is what stops `password: please` or `password='password'` from being flagged as a leaked secret — low-entropy, dictionary-like values are excluded even though they match the keyword pattern.
+**Overlap resolution** — all findings, ML and regex alike, are sorted by start position (longest match wins ties), then kept only if they don't overlap a previously accepted finding.
 
-**Medical info** — phrase-anchored regex (`diagnosed with`, `tested positive for`, `prescription for`, etc.) rather than a bare keyword list, so a sentence like "the clinic newsletter covers general asthma awareness" doesn't trigger just because "asthma" appears — the phrase itself has to imply an active personal medical context.
+**From match to UI** — the same finding list feeds three things: `highlight_html()` (in-place colored `<mark>` spans over the original text), the findings panel (category + reason cards), and `redact_text()` (back-to-front placeholder substitution so earlier redactions don't shift later offsets).
 
-**Overlap resolution** — all findings are sorted by start position (ties broken by longest match first), then a single pass keeps a finding only if it starts at or after the previous finding's end. This guarantees no two highlighted spans overlap in the UI or in redaction.
+## AI Integration Design — including a real production issue and how it was resolved
 
-**From match to UI** — three consumers read the same finding list:
-1. `highlight_html()` walks the original text and wraps each finding in a `<mark>` span colored and labeled by category, so the *original* text is shown with in-place highlights (not just a before/after diff).
-2. The findings panel renders each finding's category and `reason` as a card.
-3. `redact_text()` applies `[CATEGORY]` placeholders back-to-front (reverse-sorted by start index) so replacing one span doesn't shift the character offsets of the others.
+**Original choice: `dslim/bert-base-NER`.** A BERT-base transformer via Hugging Face `transformers` + PyTorch, chosen for accuracy and for entity types (`PER`, `ORG`) that mapped onto both the NAME and CONFIDENTIAL_INFO categories. It ran correctly in local development and passed the full test suite there.
 
-## AI Integration Design
+**What broke on deployment.** After deploying to Streamlit Community Cloud, the live app returned zero NAME findings on every input — including cases that worked locally. Because the engine is designed to fail soft (an ML load failure shouldn't crash the whole tool), this produced no visible error to the user; the app just silently behaved as if the model wasn't there. The most likely cause: `bert-base-NER` plus PyTorch's runtime is roughly 500MB+, which is tight against Streamlit Community Cloud's free-tier memory ceiling — the model most likely failed to load during the app's cold start.
 
-No AI model runs inside the app. Detection is 100% deterministic regex/keyword/validation logic, which was a deliberate choice: it avoids any paid API, keeps the tool auditable (you can point at the exact rule that fired), and avoids the irony of a privacy tool sending the user's sensitive text to a third-party LLM to check if it's sensitive.
+**The fix.** Swapped to spaCy's `en_core_web_sm` — a ~12MB pipeline with no `torch` dependency, installed directly as a wheel in `requirements.txt` so it doesn't need a runtime download call. Local re-testing after the swap: 15/16 labeled cases correct, precision 1.000, recall 0.933, F1 0.966. Redeployed and manually verified live: the NAME category now correctly appears in the deployed app's findings.
 
-AI (Claude) was used only during development — to draft synthetic test sentences and review regex edge cases — never at runtime. Detailed in `reflection.md`.
+**A design decision that came out of this swap:** the original engine also mapped BERT's `ORG` entity type to `CONFIDENTIAL_INFO`. Evaluation surfaced a false positive — the model tagging the literal word "SSN" as an organization. Rather than keep chasing that mapping (e.g., with a confidence threshold, which was tried and reverted because it also suppressed a correct NAME detection in the same test case, trading recall for no clean precision gain), the `ORG→CONFIDENTIAL_INFO` mapping was dropped entirely. `CONFIDENTIAL_INFO` is handled solely by keyword regex now, which turned out to be more precise for that category anyway.
+
+**Privacy tradeoff.** No text is sent to any external API at inference time — both the original and replacement models run locally/on-device. This was a deliberate constraint from the start: a privacy tool that phones a third-party AI service to check whether text is sensitive would undermine its own purpose, beyond also being a paid-service dependency this project intentionally avoided.
 
 ## What Changed From the Plan
 
-- **Folder structure simplified** from a `detectors/` package to a single `engine.py`, as noted above.
-- **Inline highlighting (`highlight_html`) was added mid-build**, not in the original plan — the first UI draft only showed a redacted-text box and a separate findings list, which didn't satisfy the brief's explicit "visually highlighted" requirement. Caught during review, fixed before Tier 2 work started.
-- **Bare/unformatted SSN detection was added** after edge-case testing showed dashed-format-only detection missed a realistic input shape. Gated on nearby context rather than a bare 9-digit regex, to avoid false-positiving on unrelated numeric IDs.
-- **Test suite strengthened mid-build**: the original test runner only checked finding *count*, which meant a finding with the wrong category label would still show as "passed." Rewritten to assert exact expected categories per case.
+- **`planning.md` originally proposed a fully regex/keyword-based engine** with no ML model. Partway through, hackathon orientation materials clarified that ML-driven detection was a hard requirement, not optional — the engine was restructured so NER does the core work for the NAME category, with regex supporting every structured category, matching the brief's explicit guidance.
+- **Model choice changed mid-build, in production, not in the plan.** `dslim/bert-base-NER` → `en_core_web_sm` after the free-tier deployment revealed a real memory-constraint failure that local testing hadn't caught. This is arguably the most important lesson from the build: passing tests locally doesn't guarantee correct behavior once deployed under a hosting platform's real resource limits, and a fail-soft design without visible error surfacing can hide exactly this kind of bug until it's manually checked live.
+- **Bare/unformatted SSN detection and the employee-ID/confidential-keyword categories** were added after the initial four-category build, once time allowed pushing past the Tier 1 minimum.
+- **Test suite evolved from pass/fail counting to strict per-category assertion plus precision/recall/F1**, after an early version of the suite was found to consider a wrong-category finding a "pass" as long as the count matched.
