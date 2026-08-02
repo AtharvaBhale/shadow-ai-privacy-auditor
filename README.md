@@ -22,6 +22,7 @@ See [`problem_statement.md`](./problem_statement.md) for the full brief.
     ├── walkthrough.md      # Link to your 5-minute walkthrough video
     ├── architecture.md     # Your architecture overview and detection design
     └── reflection.md       # What you built, tradeoffs, AI tools used
+├── extension/              # Tier 2: Chrome extension for ChatGPT (see extension/README.md)
 ```
 
 ---
@@ -48,6 +49,14 @@ Push to your designated repository before the **5-day deadline**. Your repo stat
 - [ ] `docs/architecture.md` - architecture overview and detection design filled in
 - [ ] `docs/reflection.md` - reflection filled in
 - [ ] Clean commit history - see note below
+
+## Tier 2 Stretch Goals Completed
+- Severity/risk scoring
+- Per-finding keep/redact controls + one-click copy
+- Configurable custom rules
+- Real-time live scanning
+- Multilingual (Spanish) detection
+- Browser extension (ChatGPT direct integration) — see `extension/`
 
 ---
 

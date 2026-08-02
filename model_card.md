@@ -55,3 +55,7 @@ Current result on the 16-case labeled set: **Precision 1.000, Recall 0.933, F1 0
 ## Tier 2: Real-Time / Live Scanning
 
 The app includes an optional "Live scanning" toggle. When enabled, the audit re-runs automatically whenever the input text changes (Streamlit re-executes the app on every widget commit), instead of requiring a manual "Run audit" click. This satisfies the brief's "real-time monitoring" stretch goal at a scope appropriate for a web app: continuous re-auditing as the user edits their text, not OS-level clipboard or system monitoring (which would raise its own privacy concerns and isn't how a Streamlit app can operate anyway).
+
+## Note: Browser Extension Scope
+
+The Tier 2 Chrome extension (`extension/`) does **not** use this model. It's a separate JavaScript environment (browser content script) that cannot run Python/spaCy. The extension ports only the regex/validation detectors from this engine — NAME detection is unavailable there. See `extension/README.md` and `docs/architecture.md` for the full explanation of why this scope limit exists and wasn't worked around with a backend API.

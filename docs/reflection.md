@@ -37,3 +37,5 @@ failing, to help design and implement the swap from BERT to spaCy after the memo
 to draft synthetic fictional test cases. No AI model is called at runtime by the deployed app itself — 
 detection is fully local (spaCy NER + regex/validation), which matters specifically because this is a 
 privacy tool.
+
+Beyond the core web app, I also built a Tier 2 Chrome extension (`extension/`) that watches ChatGPT's message composer directly and warns before you send something sensitive — combining the "browser extension" and "direct AI platform integration" stretch goals into one working deliverable. It's a JavaScript port of the app's regex/validation detectors (not the NER model, which can't run in a browser without a separate backend — a scope limit I documented rather than worked around, since building a backend just to expose the NER model would mean sending draft text to an external service, which conflicts with the whole point of a privacy tool). It intercepts both the Send button and Enter key, and shows a confirmation dialog before letting a risky message through.
