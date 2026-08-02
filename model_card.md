@@ -2,35 +2,42 @@
 
 ## Model
 
-**`dslim/bert-base-NER`** — a BERT-base model fine-tuned for Named Entity Recognition on the CoNLL-2003 dataset, hosted on Hugging Face. Apache 2.0 licensed, freely downloadable, no API key or paid service required.
+**`en_core_web_sm`** (spaCy) — a small English pipeline including a statistical/CNN-based Named Entity Recognition component, distributed by spaCy/Explosion AI under the MIT license. Free, no API key, no paid service, no GPU required.
 
-## Why this model
+### Why this replaced the original model choice
 
-- **Free and local.** Runs entirely on-device via the `transformers` library's CPU inference pipeline. The text a user pastes never leaves the machine running the app — which matters specifically because this is a *privacy* tool; sending user text to a third-party inference API to check whether it's sensitive would undermine the tool's own purpose.
-- **Right-sized for the task.** BERT-base (~110M parameters) is small enough to load and run in a Streamlit app on CPU with acceptable latency, unlike larger general-purpose LLMs that would need a GPU or a paid hosted endpoint.
-- **Entity types match our categories directly.** The model's four entity groups — `PER` (person), `ORG` (organization), `LOC` (location), `MISC` — map cleanly onto this app's needs: `PER` → our `NAME` category, `ORG` → contributes to `CONFIDENTIAL_INFO` (an organization name appearing in casual text can leak a business relationship, deal, or affiliation).
-- **Pretrained, not fine-tuned.** Training a custom model was explicitly optional per the brief; a pretrained general-purpose NER model is adequate for identifying names and organizations in everyday text without requiring our own labeled training corpus.
+The first version of this app used `dslim/bert-base-NER` (a BERT-base transformer) via Hugging Face `transformers` + PyTorch. That worked correctly in local testing, but **on the deployed Streamlit Community Cloud free tier, the model silently failed to load** — most likely due to the platform's memory ceiling being too tight for a ~500MB transformer plus the PyTorch runtime. Because the app is designed to fail soft (a broken ML component shouldn't crash the whole tool), this produced a live app that looked fully functional but was quietly missing every NAME finding, with no visible error.
+
+Rather than fighting the resource limit of a free hosting tier close to the deadline, the model was swapped for `en_core_web_sm`: ~12MB, no `torch` dependency, loads in well under a second, and is bundled directly via `requirements.txt` (as a wheel URL) so no runtime download is needed on cold start. This is a deliberate reliability-over-sophistication tradeoff, made explicitly because a model that doesn't load provides zero value regardless of its accuracy ceiling.
+
+## Why this model (general)
+
+- **Free and local.** Runs entirely on-device; the text a user pastes never leaves the machine running the app.
+- **Right-sized for a free-tier deployment.** Small enough to load reliably within Streamlit Community Cloud's resource limits.
+- **Entity types map to our categories.** spaCy's `PERSON` label maps to this app's `NAME` category.
 
 ## What the model does vs. what regex does
 
-The ML model handles **linguistic entity recognition** — the part of the problem that pattern matching is genuinely bad at (recognizing "Alice Smith" as a name requires understanding context and structure, not just a fixed pattern).
+The ML model handles **linguistic entity recognition** — specifically, the `NAME` category, which pattern matching alone can't reliably do (recognizing "Alice Smith" as a name requires understanding sentence structure, not just a fixed pattern).
 
-Regex + validation logic (Luhn checksum, Shannon entropy, keyword proximity) handle **structured/rule-based categories** where the data has a fixed, well-defined shape: SSNs, credit card numbers, API keys/passwords, employee/volunteer ID codes, and confidential-keyword triggers. This split follows the brief's explicit guidance: *"Regular expressions may support it, but the model does the core work."* The model is the only detector for the NAME category and contributes to CONFIDENTIAL_INFO; every other category is regex/validation-driven because it is inherently structured, not linguistic.
+Regex + validation logic (Luhn checksum, Shannon entropy, keyword proximity) handle every other category: contact info, SSNs, credit cards, credentials, medical info, employee/client IDs, and confidential-organization keywords. This follows the brief's guidance that "regular expressions may support it, but the model does the core work" — the model owns the one category (names) that is genuinely linguistic rather than structured.
+
+**Note on spaCy's `ORG` label:** an earlier version of this engine also mapped `ORG` entities to the `CONFIDENTIAL_INFO` category. Evaluation showed this produced a false positive — spaCy tagged the literal word "SSN" as an `ORG` entity in one test case. `ORG` mapping was removed; `CONFIDENTIAL_INFO` is handled entirely by keyword-trigger regex instead, which proved more precise for that category.
 
 ## Accuracy
 
-See `test_cases.py` → `evaluate_metrics()` for the precision/recall/F1 computation over the labeled test set in the same file. Run with:
+See `test_cases.py` → `evaluate_metrics()`. Run with:
 
 ```bash
 python test_cases.py
 ```
 
-This prints per-case pass/fail plus aggregate precision, recall, and F1 across all labeled categories in the set.
+Current result on the 16-case labeled set: **Precision 1.000, Recall 0.933, F1 0.966** (15/16 cases fully correct).
 
-**Known false positive, documented rather than papered over.** On `"Volunteer ID VOL-4821 (Maria) missed her shift; SSN 123-45-6789."`, the model tags an extra low-confidence `ORG` entity that isn't a real organization. A confidence threshold (0.85) was tried to filter this out; it also suppressed the correct `NAME` detection for "Maria" in the same sentence, trading recall for no net precision gain. The threshold was reverted. With the hackathon deadline close, this is disclosed as a known limitation rather than chased further — see `docs/reflection.md`.
+**Known limitation, disclosed rather than hidden:** on `"Volunteer ID VOL-4821 (Maria) missed her shift; SSN 123-45-6789."`, the model does not detect "Maria" as a `PERSON` — a single first name inside a parenthetical mid-sentence is a harder case for a small statistical NER model than a full name after a salutation (which it detects correctly, per test #15). This is the one false negative in the current suite.
 
 ## Limitations
 
-- `dslim/bert-base-NER` was trained on CoNLL-2003 (Reuters news text from the 1990s). Its accuracy on informal chat-style text, unusual names, or non-Western names is weaker than on the news-style text it was trained on — a known limitation, not something this integration works around.
-- `ORG` detection is a proxy for "confidential info," not a precise category — it will also flag organization names in completely benign, non-confidential sentences (e.g., "I had lunch near Acme Corp's office"). This is a deliberate precision/recall tradeoff disclosed here rather than hidden.
-- Model load time adds a few seconds of latency on first use in a session; the app caches the loaded pipeline after that.
+- `en_core_web_sm`'s NER is shallower than a transformer model like BERT — it is more likely to miss names in unusual sentence structures or short/isolated name fragments (see above).
+- It was trained on general English text; performance on informal chat-style text or non-Western names is not independently verified here.
+- Model load adds negligible latency (well under a second), unlike the original transformer approach, which was part of why it was chosen for this deployment.

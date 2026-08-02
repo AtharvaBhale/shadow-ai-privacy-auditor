@@ -8,37 +8,46 @@ import math
 # audit call, and so importing this module doesn't require the model to be
 # present (keeps unit tests fast / offline-safe).
 # ---------------------------------------------------------------------------
-_ner_pipeline = None
+_nlp_spacy = None
 
 
 def _get_ner_pipeline():
-    global _ner_pipeline
-    if _ner_pipeline is None:
-        from transformers import pipeline
-        _ner_pipeline = pipeline(
-            "ner",
-            model="dslim/bert-base-NER",
-            grouped_entities=True,
-        )
-    return _ner_pipeline
+    """Loads spaCy's small English model (en_core_web_sm), cached after first
+    call. Swapped in from a larger transformer model (dslim/bert-base-NER)
+    after evaluation on the deployed free-tier host showed the ~500MB
+    transformer + PyTorch combination silently failed to load under the
+    platform's memory limit (see docs/model_card.md for the full account).
+    en_core_web_sm is ~12MB, has no torch dependency, and loads in well
+    under a second, at the cost of using a shallower statistical/CNN model
+    rather than a transformer."""
+    global _nlp_spacy
+    if _nlp_spacy is None:
+        import spacy
+        _nlp_spacy = spacy.load("en_core_web_sm")
+    return _nlp_spacy
 
 
 class PrivacyAuditorEngine:
     """
-    Detection is ML-first: a pretrained NER model (dslim/bert-base-NER) does
-    the core work of finding names and organizations (see model card in
-    docs/model_card.md). Regex + validation logic SUPPORT the model for
-    categories that are inherently structured/rule-based rather than
-    linguistic — SSNs, credit card numbers (Luhn-validated), and credentials
-    (entropy-validated) — exactly as the brief allows ("regular expressions
-    may support it, but the model does the core work").
+    Detection is ML-first for the NAME category: a pretrained NER model
+    (spaCy en_core_web_sm) does the core work of finding person names (see
+    model card in docs/model_card.md). Regex + validation logic SUPPORT the
+    model for categories that are inherently structured/rule-based rather
+    than linguistic — SSNs, credit card numbers (Luhn-validated), credentials
+    (entropy-validated), employee/client IDs, and confidential-keyword
+    triggers — exactly as the brief allows ("regular expressions may support
+    it, but the model does the core work").
+
+    Note: spaCy's ORG entity label is not mapped to CONFIDENTIAL_INFO. During
+    evaluation it produced false positives (e.g. tagging "SSN" itself as an
+    ORG), so CONFIDENTIAL_INFO is handled entirely by the keyword regex
+    below instead, which is more precise for that category.
     """
 
-    # NER entity groups this app treats as sensitive, and which internal
+    # NER entity labels this app treats as sensitive, and which internal
     # category each maps to.
     NER_CATEGORY_MAP = {
-        "PER": "NAME",
-        "ORG": "CONFIDENTIAL_INFO",   # org names showing up in casual text can leak affiliations/deals
+        "PERSON": "NAME",
     }
 
     def __init__(self, use_ml: bool = True):
@@ -104,27 +113,26 @@ class PrivacyAuditorEngine:
         try:
             nlp = _get_ner_pipeline()
         except Exception:
-            # Model unavailable (e.g. no network in this environment) —
-            # fail soft so regex detectors still run rather than crashing
-            # the whole app. This should not happen in the deployed app,
-            # which has normal internet access to download the model once.
+            # Model unavailable — fail soft so regex detectors still run
+            # rather than crashing the whole app. Should not happen in the
+            # deployed app; en_core_web_sm is bundled via requirements.txt
+            # and loads without any network call at runtime.
             return findings
 
-        for ent in nlp(text):
-            group = ent.get("entity_group")
-            category = self.NER_CATEGORY_MAP.get(group)
+        doc = nlp(text)
+        for ent in doc.ents:
+            category = self.NER_CATEGORY_MAP.get(ent.label_)
             if category is None:
                 continue
-            score = float(ent.get('score', 0.0))
             findings.append({
-                'start': ent['start'],
-                'end': ent['end'],
+                'start': ent.start_char,
+                'end': ent.end_char,
                 'category': category,
-                'value': text[ent['start']:ent['end']],
-                'reason': f'Detected by NER model (dslim/bert-base-NER) as a {group} entity — '
-                          f'may identify an individual or organization.',
+                'value': ent.text,
+                'reason': f'Detected by NER model (spaCy en_core_web_sm) as a {ent.label_} entity — '
+                          f'may identify an individual.',
                 'source': 'ml',
-                'confidence': score,
+                'confidence': None,  # spaCy's small pipeline does not expose a calibrated confidence score
             })
         return findings
 
